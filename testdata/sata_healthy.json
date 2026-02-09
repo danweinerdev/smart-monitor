@@ -1,0 +1,136 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 2],
+    "svn_revision": "5155",
+    "platform_info": "x86_64-linux-4.4.302+",
+    "build_info": "(local build)",
+    "argv": ["smartctl", "--json", "-a", "-d", "sat", "/dev/sata1"],
+    "exit_status": 0
+  },
+  "device": {
+    "name": "/dev/sata1",
+    "info_name": "/dev/sata1 [SAT]",
+    "type": "sat",
+    "protocol": "ATA"
+  },
+  "model_name": "WDC WD40EFAX-68JH4N1",
+  "serial_number": "WD-WXB2D81JKTP2",
+  "firmware_version": "82.00A82",
+  "user_capacity": {
+    "bytes": 4000787030016
+  },
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 34
+  },
+  "power_on_time": {
+    "hours": 28456
+  },
+  "ata_smart_attributes": {
+    "revision": 16,
+    "table": [
+      {
+        "id": 1,
+        "name": "Raw_Read_Error_Rate",
+        "value": 200,
+        "worst": 200,
+        "thresh": 51,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 3,
+        "name": "Spin_Up_Time",
+        "value": 175,
+        "worst": 166,
+        "thresh": 21,
+        "raw": {
+          "value": 6308,
+          "string": "6308"
+        }
+      },
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 200,
+        "worst": 200,
+        "thresh": 140,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 7,
+        "name": "Seek_Error_Rate",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 9,
+        "name": "Power_On_Hours",
+        "value": 62,
+        "worst": 62,
+        "thresh": 0,
+        "raw": {
+          "value": 28456,
+          "string": "28456"
+        }
+      },
+      {
+        "id": 10,
+        "name": "Spin_Retry_Count",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 194,
+        "name": "Temperature_Celsius",
+        "value": 117,
+        "worst": 103,
+        "thresh": 0,
+        "raw": {
+          "value": 34,
+          "string": "34"
+        }
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {
+    "version": [7, 2],
+    "svn_revision": "5155",
+    "platform_info": "x86_64-linux-4.4.302+",
+    "build_info": "(local build)",
+    "argv": ["smartctl", "--json", "-a", "-d", "sat", "/dev/sata2"],
+    "exit_status": 0
+  },
+  "device": {
+    "name": "/dev/sata2",
+    "info_name": "/dev/sata2 [SAT]",
+    "type": "sat",
+    "protocol": "ATA"
+  },
+  "model_name": "Seagate IronWolf ST4000VN008",
+  "serial_number": "ZDH8BV2R",
+  "firmware_version": "SC60",
+  "user_capacity": {
+    "bytes": 4000787030016
+  },
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 42
+  },
+  "power_on_time": {
+    "hours": 45123
+  },
+  "ata_smart_attributes": {
+    "revision": 10,
+    "table": [
+      {
+        "id": 1,
+        "name": "Raw_Read_Error_Rate",
+        "value": 81,
+        "worst": 64,
+        "thresh": 44,
+        "raw": {
+          "value": 168819507,
+          "string": "168819507"
+        }
+      },
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 100,
+        "worst": 100,
+        "thresh": 10,
+        "raw": {
+          "value": 16,
+          "string": "16"
+        }
+      },
+      {
+        "id": 7,
+        "name": "Seek_Error_Rate",
+        "value": 87,
+        "worst": 60,
+        "thresh": 45,
+        "raw": {
+          "value": 529684992,
+          "string": "529684992"
+        }
+      },
+      {
+        "id": 9,
+        "name": "Power_On_Hours",
+        "value": 45,
+        "worst": 45,
+        "thresh": 0,
+        "raw": {
+          "value": 45123,
+          "string": "45123"
+        }
+      },
+      {
+        "id": 10,
+        "name": "Spin_Retry_Count",
+        "value": 100,
+        "worst": 100,
+        "thresh": 97,
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 194,
+        "name": "Temperature_Celsius",
+        "value": 58,
+        "worst": 45,
+        "thresh": 0,
+        "raw": {
+          "value": 42,
+          "string": "42 (0 18 0 0 0)"
+        }
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {
+          "value": 8,
+          "string": "8"
+        }
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {
+          "value": 4,
+          "string": "4"
+        }
+      }
+    ]
+  }
+}
