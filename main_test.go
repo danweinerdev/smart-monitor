@@ -1,22 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"sync/atomic"
+	"log"
+	"os"
 	"testing"
 	"time"
 )
-
-// countingCollector wraps a Collector with a call counter for testing.
-type countingCollector struct {
-	collector *Collector
-	count     atomic.Int32
-}
-
-func (c *countingCollector) collectAll() ([]DriveMetrics, []error) {
-	c.count.Add(1)
-	return c.collector.CollectAll()
-}
 
 func TestRunLoop_CollectsAndShutdown(t *testing.T) {
 	drives := []Drive{
@@ -129,4 +120,132 @@ func TestRunLoop_WriterErrorDoesNotCrash(t *testing.T) {
 		t.Fatal("run loop did not shut down in time")
 	}
 	// If we get here, the loop survived write errors.
+}
+
+func TestRunOnce(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+	}
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
+		},
+		errs: map[string]error{},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	writer := newMockWriter(nil)
+
+	cfg := &Config{
+		Interval: 1 * time.Hour,
+		Hostname: "test-nas",
+		RunOnce:  true,
+	}
+
+	ctx := context.Background()
+	run(ctx, cfg, collector, writer)
+
+	if len(writer.written) != 1 {
+		t.Errorf("got %d writes, want exactly 1", len(writer.written))
+	}
+}
+
+func TestEchoWriter(t *testing.T) {
+	w := &echoWriter{}
+
+	metrics := []DriveMetrics{
+		{
+			Drive:  Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+			Model:  "WD Red",
+			Serial: "WD001",
+			Fields: map[string]interface{}{
+				"temperature":    int64(34),
+				"power_on_hours": int64(1000),
+			},
+		},
+		{
+			Drive:  Drive{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: DriveTypeNVMe},
+			Model:  "Samsung 970",
+			Serial: "SAM001",
+			Fields: map[string]interface{}{
+				"temperature":     int64(38),
+				"percentage_used": int64(5),
+			},
+		},
+	}
+
+	// Capture stdout.
+	r, wPipe, _ := os.Pipe()
+	origStdout := os.Stdout
+	os.Stdout = wPipe
+
+	err := w.Write(context.Background(), "test-nas", metrics)
+
+	wPipe.Close()
+	os.Stdout = origStdout
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var out bytes.Buffer
+	out.ReadFrom(r)
+	output := out.String()
+
+	// Verify both drives appear.
+	if !bytes.Contains([]byte(output), []byte("drive=sata1")) {
+		t.Error("output missing sata1 drive")
+	}
+	if !bytes.Contains([]byte(output), []byte("drive=nvme0n1")) {
+		t.Error("output missing nvme0n1 drive")
+	}
+	if !bytes.Contains([]byte(output), []byte("temperature = 34")) {
+		t.Error("output missing temperature field for sata1")
+	}
+	if !bytes.Contains([]byte(output), []byte("percentage_used = 5")) {
+		t.Error("output missing percentage_used field for nvme0n1")
+	}
+}
+
+func TestRunOnceWithEcho(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+	}
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
+		},
+		errs: map[string]error{},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	writer := &echoWriter{}
+
+	cfg := &Config{
+		Interval: 1 * time.Hour,
+		Hostname: "test-nas",
+		RunOnce:  true,
+	}
+
+	// Redirect stdout to capture echo output.
+	r, wPipe, _ := os.Pipe()
+	origStdout := os.Stdout
+	os.Stdout = wPipe
+
+	// Redirect log output to stderr so it doesn't go to our pipe.
+	log.SetOutput(os.Stderr)
+	defer log.SetOutput(os.Stderr)
+
+	ctx := context.Background()
+	run(ctx, cfg, collector, writer)
+
+	wPipe.Close()
+	os.Stdout = origStdout
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+
+	if !bytes.Contains(buf.Bytes(), []byte("drive=sata1")) {
+		t.Error("echo output missing sata1")
+	}
 }

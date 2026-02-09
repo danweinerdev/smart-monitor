@@ -20,6 +20,7 @@ type Config struct {
 	Interval time.Duration  `yaml:"interval"`
 	Hostname string         `yaml:"hostname"`
 	LogLevel string         `yaml:"log_level"`
+	RunOnce  bool           `yaml:"-"`
 }
 
 func LoadConfig(path string) (*Config, error) {
