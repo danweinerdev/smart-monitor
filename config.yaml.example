@@ -1,0 +1,8 @@
+influxdb:
+  url: "http://192.168.1.100:8086"
+  token: "your-token"
+  org: "my-org"
+  bucket: "synology"
+interval: 30m
+# hostname: "ds920plus"  # defaults to os.Hostname()
+log_level: info
