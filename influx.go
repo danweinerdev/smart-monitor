@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -16,24 +18,81 @@ type MetricWriter interface {
 	Close()
 }
 
-// InfluxWriter writes SMART metrics to InfluxDB v2.
+// InfluxWriter writes SMART metrics to InfluxDB v2 with retry and health tracking.
 type InfluxWriter struct {
-	client   influxdb2.Client
-	writeAPI api.WriteAPIBlocking
+	client        influxdb2.Client
+	writeAPI      api.WriteAPIBlocking
+	retryAttempts int
+	retryDelay    time.Duration
+	logger        *slog.Logger
+
+	mu                  sync.Mutex
+	consecutiveFailures int
+	healthy             bool
 }
 
-func NewInfluxWriter(cfg InfluxDBConfig) *InfluxWriter {
+func NewInfluxWriter(cfg InfluxDBConfig, logger *slog.Logger) *InfluxWriter {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	client := influxdb2.NewClient(cfg.URL, cfg.Token)
 	writeAPI := client.WriteAPIBlocking(cfg.Org, cfg.Bucket)
 	return &InfluxWriter{
-		client:   client,
-		writeAPI: writeAPI,
+		client:        client,
+		writeAPI:      writeAPI,
+		retryAttempts: cfg.RetryAttempts,
+		retryDelay:    cfg.RetryDelay,
+		logger:        logger,
+		healthy:       true,
 	}
 }
 
 func (w *InfluxWriter) Write(ctx context.Context, hostname string, metrics []DriveMetrics) error {
 	points := buildPoints(hostname, metrics, time.Now())
-	return w.writeAPI.WritePoint(ctx, points...)
+	return w.writeWithRetry(ctx, points)
+}
+
+func (w *InfluxWriter) writeWithRetry(ctx context.Context, points []*write.Point) error {
+	var lastErr error
+	for attempt := 0; attempt <= w.retryAttempts; attempt++ {
+		if attempt > 0 {
+			w.logger.Warn("retrying InfluxDB write",
+				"attempt", attempt,
+				"max_attempts", w.retryAttempts,
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(w.retryDelay):
+			}
+		}
+		if err := w.writeAPI.WritePoint(ctx, points...); err != nil {
+			lastErr = err
+			continue
+		}
+		// Success — reset failure tracking.
+		w.mu.Lock()
+		w.consecutiveFailures = 0
+		w.healthy = true
+		w.mu.Unlock()
+		return nil
+	}
+	// All attempts exhausted.
+	w.mu.Lock()
+	w.consecutiveFailures++
+	if w.consecutiveFailures >= 3 {
+		w.healthy = false
+	}
+	w.mu.Unlock()
+	return fmt.Errorf("write failed after %d attempts: %w", w.retryAttempts+1, lastErr)
+}
+
+// Healthy returns whether the writer is in a healthy state.
+// It becomes unhealthy after 3 consecutive write failures (across retry cycles).
+func (w *InfluxWriter) Healthy() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.healthy
 }
 
 func (w *InfluxWriter) Close() {

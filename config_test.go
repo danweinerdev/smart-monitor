@@ -1,8 +1,10 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,6 +81,12 @@ influxdb:
 	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("default log_level = %q, want %q", cfg.LogLevel, "info")
+	}
+	if cfg.InfluxDB.RetryAttempts != 3 {
+		t.Errorf("default retry_attempts = %d, want 3", cfg.InfluxDB.RetryAttempts)
+	}
+	if cfg.InfluxDB.RetryDelay != 2*time.Second {
+		t.Errorf("default retry_delay = %v, want 2s", cfg.InfluxDB.RetryDelay)
 	}
 }
 
@@ -162,22 +170,22 @@ func TestLoadConfig_ValidationErrors(t *testing.T) {
 		{
 			name:    "missing url",
 			yaml:    `influxdb: {token: "t", org: "o", bucket: "b"}`,
-			wantErr: "influxdb.url is required",
+			wantErr: "influxdb.url: is required",
 		},
 		{
 			name:    "missing token",
 			yaml:    `influxdb: {url: "http://x", org: "o", bucket: "b"}`,
-			wantErr: "influxdb.token is required",
+			wantErr: "influxdb.token: is required",
 		},
 		{
 			name:    "missing org",
 			yaml:    `influxdb: {url: "http://x", token: "t", bucket: "b"}`,
-			wantErr: "influxdb.org is required",
+			wantErr: "influxdb.org: is required",
 		},
 		{
 			name:    "missing bucket",
 			yaml:    `influxdb: {url: "http://x", token: "t", org: "o"}`,
-			wantErr: "influxdb.bucket is required",
+			wantErr: "influxdb.bucket: is required",
 		},
 	}
 
@@ -195,6 +203,44 @@ func TestLoadConfig_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_MultipleValidationErrors(t *testing.T) {
+	path := writeTestConfig(t, `influxdb: {}`)
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	verrs, ok := err.(ValidationErrors)
+	if !ok {
+		t.Fatalf("expected ValidationErrors, got %T: %v", err, err)
+	}
+	if len(verrs) < 4 {
+		t.Errorf("expected at least 4 validation errors, got %d: %v", len(verrs), verrs)
+	}
+
+	errStr := err.Error()
+	if !strings.Contains(errStr, "influxdb.url") {
+		t.Errorf("error should mention influxdb.url: %s", errStr)
+	}
+	if !strings.Contains(errStr, "influxdb.token") {
+		t.Errorf("error should mention influxdb.token: %s", errStr)
+	}
+}
+
+func TestLoadConfig_InvalidLogLevel(t *testing.T) {
+	path := writeTestConfig(t, `
+influxdb: {url: "http://x", token: "t", org: "o", bucket: "b"}
+log_level: "verbose"
+`)
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected error for invalid log level")
+	}
+	if !strings.Contains(err.Error(), "log_level") {
+		t.Errorf("error should mention log_level: %v", err)
+	}
+}
+
 func TestLoadConfig_FileNotFound(t *testing.T) {
 	_, err := LoadConfig("/nonexistent/config.yaml")
 	if err == nil {
@@ -207,5 +253,24 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 	_, err := LoadConfig(path)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"warn", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"DEBUG", slog.LevelDebug},
+		{"unknown", slog.LevelInfo},
+	}
+	for _, tt := range tests {
+		if got := ParseLogLevel(tt.input); got != tt.want {
+			t.Errorf("ParseLogLevel(%q) = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }

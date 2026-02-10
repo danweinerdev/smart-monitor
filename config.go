@@ -2,17 +2,21 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type InfluxDBConfig struct {
-	URL    string `yaml:"url"`
-	Token  string `yaml:"token"`
-	Org    string `yaml:"org"`
-	Bucket string `yaml:"bucket"`
+	URL           string `yaml:"url"`
+	Token         string `yaml:"token"`
+	Org           string `yaml:"org"`
+	Bucket        string `yaml:"bucket"`
+	RetryAttempts int    `yaml:"retry_attempts"`
+	RetryDelay    time.Duration `yaml:"retry_delay"`
 }
 
 type Config struct {
@@ -23,10 +27,38 @@ type Config struct {
 	RunOnce  bool           `yaml:"-"`
 }
 
+// ValidationError represents a single config validation error.
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+// ValidationErrors collects multiple validation errors.
+type ValidationErrors []ValidationError
+
+func (e ValidationErrors) Error() string {
+	if len(e) == 1 {
+		return e[0].Error()
+	}
+	msgs := make([]string, len(e))
+	for i, err := range e {
+		msgs[i] = err.Error()
+	}
+	return fmt.Sprintf("config validation failed:\n  - %s", strings.Join(msgs, "\n  - "))
+}
+
 func LoadConfig(path string) (*Config, error) {
 	cfg := &Config{
 		Interval: 30 * time.Minute,
 		LogLevel: "info",
+		InfluxDB: InfluxDBConfig{
+			RetryAttempts: 3,
+			RetryDelay:    2 * time.Second,
+		},
 	}
 
 	data, err := os.ReadFile(path)
@@ -79,20 +111,45 @@ func applyEnvOverrides(cfg *Config) {
 }
 
 func validateConfig(cfg *Config) error {
+	var errs ValidationErrors
+
 	if cfg.InfluxDB.URL == "" {
-		return fmt.Errorf("influxdb.url is required")
+		errs = append(errs, ValidationError{Field: "influxdb.url", Message: "is required"})
 	}
 	if cfg.InfluxDB.Token == "" {
-		return fmt.Errorf("influxdb.token is required")
+		errs = append(errs, ValidationError{Field: "influxdb.token", Message: "is required"})
 	}
 	if cfg.InfluxDB.Org == "" {
-		return fmt.Errorf("influxdb.org is required")
+		errs = append(errs, ValidationError{Field: "influxdb.org", Message: "is required"})
 	}
 	if cfg.InfluxDB.Bucket == "" {
-		return fmt.Errorf("influxdb.bucket is required")
+		errs = append(errs, ValidationError{Field: "influxdb.bucket", Message: "is required"})
 	}
 	if cfg.Interval <= 0 {
-		return fmt.Errorf("interval must be positive")
+		errs = append(errs, ValidationError{Field: "interval", Message: "must be positive"})
+	}
+
+	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if !validLevels[strings.ToLower(cfg.LogLevel)] {
+		errs = append(errs, ValidationError{Field: "log_level", Message: "must be one of: debug, info, warn, error"})
+	}
+
+	if len(errs) > 0 {
+		return errs
 	}
 	return nil
+}
+
+// ParseLogLevel converts a log level string to slog.Level.
+func ParseLogLevel(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

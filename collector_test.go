@@ -66,14 +66,14 @@ func TestCollector_AllSucceed(t *testing.T) {
 
 	runner := &mockRunner{
 		outputs: map[string]*SmartctlOutput{
-			"/dev/sata1":  makeSATAOutput("WD Red", "WD001"),
-			"/dev/sata2":  makeSATAOutput("WD Red", "WD002"),
+			"/dev/sata1":   makeSATAOutput("WD Red", "WD001"),
+			"/dev/sata2":   makeSATAOutput("WD Red", "WD002"),
 			"/dev/nvme0n1": makeNVMeOutput("Samsung 970", "SAM001"),
 		},
 		errs: map[string]error{},
 	}
 
-	c := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	c := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
 	metrics, errs := c.CollectAll()
 
 	if len(errs) != 0 {
@@ -101,7 +101,7 @@ func TestCollector_PartialFailure(t *testing.T) {
 		},
 	}
 
-	c := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	c := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
 	metrics, errs := c.CollectAll()
 
 	if len(metrics) != 2 {
@@ -113,7 +113,7 @@ func TestCollector_PartialFailure(t *testing.T) {
 }
 
 func TestCollector_EmptyDiscovery(t *testing.T) {
-	c := NewCollector(&mockDiscoverer{drives: nil}, &mockRunner{})
+	c := NewCollector(&mockDiscoverer{drives: nil}, &mockRunner{}, nil)
 	metrics, errs := c.CollectAll()
 
 	if len(metrics) != 0 {
@@ -128,6 +128,7 @@ func TestCollector_DiscoveryError(t *testing.T) {
 	c := NewCollector(
 		&mockDiscoverer{err: fmt.Errorf("permission denied")},
 		&mockRunner{},
+		nil,
 	)
 	metrics, errs := c.CollectAll()
 
@@ -136,5 +137,61 @@ func TestCollector_DiscoveryError(t *testing.T) {
 	}
 	if len(errs) != 1 {
 		t.Fatalf("got %d errors, want 1", len(errs))
+	}
+}
+
+func TestCollector_Stats(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+		{Path: "/dev/sata2", Name: "sata2", Type: DriveTypeSATA},
+	}
+
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
+		},
+		errs: map[string]error{
+			"/dev/sata2": fmt.Errorf("timeout"),
+		},
+	}
+
+	c := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	c.CollectAll()
+
+	stats := c.Stats()
+	if stats.TotalPolls != 1 {
+		t.Errorf("TotalPolls = %d, want 1", stats.TotalPolls)
+	}
+	if stats.SuccessfulPolls != 1 {
+		t.Errorf("SuccessfulPolls = %d, want 1", stats.SuccessfulPolls)
+	}
+	if stats.FailedPolls != 1 {
+		t.Errorf("FailedPolls = %d, want 1", stats.FailedPolls)
+	}
+	if stats.LastDuration <= 0 {
+		t.Error("LastDuration should be positive")
+	}
+}
+
+func TestCollector_ConcurrentExecution(t *testing.T) {
+	// Verify that all drives are polled even with concurrent execution.
+	drives := make([]Drive, 10)
+	outputs := make(map[string]*SmartctlOutput)
+	for i := range drives {
+		path := fmt.Sprintf("/dev/sata%d", i+1)
+		name := fmt.Sprintf("sata%d", i+1)
+		drives[i] = Drive{Path: path, Name: name, Type: DriveTypeSATA}
+		outputs[path] = makeSATAOutput("WD Red", fmt.Sprintf("WD%03d", i+1))
+	}
+
+	runner := &mockRunner{outputs: outputs, errs: map[string]error{}}
+	c := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	metrics, errs := c.CollectAll()
+
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+	if len(metrics) != 10 {
+		t.Errorf("got %d metrics, want 10", len(metrics))
 	}
 }

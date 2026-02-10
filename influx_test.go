@@ -3,9 +3,48 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/influxdata/influxdb-client-go/v2/api/write"
 )
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// mockBlockingAPI implements api.WriteAPIBlocking for testing retry logic.
+type mockBlockingAPI struct {
+	callCount int
+	failUntil int
+	failErr   error
+	points    []*write.Point
+}
+
+func (m *mockBlockingAPI) WriteRecord(_ context.Context, _ ...string) error { return nil }
+func (m *mockBlockingAPI) EnableBatching()                                   {}
+func (m *mockBlockingAPI) Flush(_ context.Context) error                     { return nil }
+
+func (m *mockBlockingAPI) WritePoint(_ context.Context, points ...*write.Point) error {
+	m.callCount++
+	if m.callCount <= m.failUntil {
+		return m.failErr
+	}
+	m.points = append(m.points, points...)
+	return nil
+}
+
+func newTestInfluxWriterWithAPI(api *mockBlockingAPI, retryAttempts int, retryDelay time.Duration) *InfluxWriter {
+	return &InfluxWriter{
+		writeAPI:      api,
+		retryAttempts: retryAttempts,
+		retryDelay:    retryDelay,
+		logger:        discardLogger(),
+		healthy:       true,
+	}
+}
 
 func TestInfluxWriter_SATAPointConstruction(t *testing.T) {
 	w := newTestableInfluxWriter(nil)
@@ -16,10 +55,10 @@ func TestInfluxWriter_SATAPointConstruction(t *testing.T) {
 			Model:  "WDC WD40EFAX",
 			Serial: "WD-ABC123",
 			Fields: map[string]interface{}{
-				"temperature":            int64(34),
-				"power_on_hours":         int64(28456),
+				"temperature":              int64(34),
+				"power_on_hours":           int64(28456),
 				"reallocated_sector_count": int64(0),
-				"current_pending_sector": int64(0),
+				"current_pending_sector":   int64(0),
 			},
 		},
 	}
@@ -52,10 +91,10 @@ func TestInfluxWriter_SATAPointConstruction(t *testing.T) {
 
 	// Check fields.
 	fieldChecks := map[string]int64{
-		"temperature":            34,
-		"power_on_hours":         28456,
+		"temperature":              34,
+		"power_on_hours":           28456,
 		"reallocated_sector_count": 0,
-		"current_pending_sector": 0,
+		"current_pending_sector":   0,
 	}
 	for k, want := range fieldChecks {
 		v, err := verifyPointField(p, k)
@@ -190,5 +229,158 @@ func TestBuildPoints_MeasurementName(t *testing.T) {
 	points := buildPoints("nas01", metrics, time.Now())
 	if points[0].Name() != "smart" {
 		t.Errorf("measurement = %q, want %q", points[0].Name(), "smart")
+	}
+}
+
+func TestInfluxWriter_RetrySuccess(t *testing.T) {
+	// Fails twice, succeeds on third attempt.
+	mock := &mockBlockingAPI{
+		failUntil: 2,
+		failErr:   fmt.Errorf("connection refused"),
+	}
+	w := newTestInfluxWriterWithAPI(mock, 3, time.Millisecond)
+
+	metrics := []DriveMetrics{
+		{
+			Drive:  Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+			Model:  "WD",
+			Serial: "WD001",
+			Fields: map[string]interface{}{"temperature": int64(34)},
+		},
+	}
+
+	err := w.Write(context.Background(), "nas01", metrics)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if mock.callCount != 3 {
+		t.Errorf("call count = %d, want 3", mock.callCount)
+	}
+	if !w.Healthy() {
+		t.Error("writer should be healthy after successful write")
+	}
+}
+
+func TestInfluxWriter_RetryExhausted(t *testing.T) {
+	// All attempts fail.
+	mock := &mockBlockingAPI{
+		failUntil: 100,
+		failErr:   fmt.Errorf("connection refused"),
+	}
+	w := newTestInfluxWriterWithAPI(mock, 2, time.Millisecond)
+
+	metrics := []DriveMetrics{
+		{
+			Drive:  Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+			Model:  "WD",
+			Serial: "WD001",
+			Fields: map[string]interface{}{"temperature": int64(34)},
+		},
+	}
+
+	err := w.Write(context.Background(), "nas01", metrics)
+	if err == nil {
+		t.Fatal("expected error after exhausted retries")
+	}
+	// 1 initial + 2 retries = 3 calls.
+	if mock.callCount != 3 {
+		t.Errorf("call count = %d, want 3", mock.callCount)
+	}
+}
+
+func TestInfluxWriter_RetryContextCanceled(t *testing.T) {
+	mock := &mockBlockingAPI{
+		failUntil: 100,
+		failErr:   fmt.Errorf("connection refused"),
+	}
+	w := newTestInfluxWriterWithAPI(mock, 5, 50*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	metrics := []DriveMetrics{
+		{
+			Drive:  Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+			Model:  "WD",
+			Serial: "WD001",
+			Fields: map[string]interface{}{"temperature": int64(34)},
+		},
+	}
+
+	// Cancel after first failure during retry delay.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	err := w.Write(ctx, "nas01", metrics)
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestInfluxWriter_HealthTracking(t *testing.T) {
+	mock := &mockBlockingAPI{
+		failUntil: 100,
+		failErr:   fmt.Errorf("connection refused"),
+	}
+	w := newTestInfluxWriterWithAPI(mock, 0, time.Millisecond) // No retries.
+
+	metrics := []DriveMetrics{
+		{
+			Drive:  Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+			Model:  "WD",
+			Serial: "WD001",
+			Fields: map[string]interface{}{"temperature": int64(34)},
+		},
+	}
+
+	if !w.Healthy() {
+		t.Fatal("should start healthy")
+	}
+
+	// First two failures: still healthy.
+	w.Write(context.Background(), "nas01", metrics)
+	if !w.Healthy() {
+		t.Error("should be healthy after 1 failure")
+	}
+	w.Write(context.Background(), "nas01", metrics)
+	if !w.Healthy() {
+		t.Error("should be healthy after 2 failures")
+	}
+
+	// Third consecutive failure: unhealthy.
+	w.Write(context.Background(), "nas01", metrics)
+	if w.Healthy() {
+		t.Error("should be unhealthy after 3 consecutive failures")
+	}
+}
+
+func TestInfluxWriter_HealthRecovery(t *testing.T) {
+	mock := &mockBlockingAPI{
+		failUntil: 2,
+		failErr:   fmt.Errorf("connection refused"),
+	}
+	w := newTestInfluxWriterWithAPI(mock, 0, time.Millisecond) // No retries.
+
+	metrics := []DriveMetrics{
+		{
+			Drive:  Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+			Model:  "WD",
+			Serial: "WD001",
+			Fields: map[string]interface{}{"temperature": int64(34)},
+		},
+	}
+
+	// Fail twice, then succeed — verify health resets.
+	w.Write(context.Background(), "nas01", metrics)
+	w.Write(context.Background(), "nas01", metrics)
+
+	// Third call succeeds (mock.failUntil=2, so call 3 succeeds).
+	err := w.Write(context.Background(), "nas01", metrics)
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+	if !w.Healthy() {
+		t.Error("should be healthy after successful write")
 	}
 }

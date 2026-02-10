@@ -3,6 +3,8 @@ influxdb:
   token: "your-token"
   org: "my-org"
   bucket: "synology"
+  # retry_attempts: 3     # default: 3
+  # retry_delay: 2s       # default: 2s
 interval: 30m
 # hostname: "ds920plus"  # defaults to os.Hostname()
 log_level: info

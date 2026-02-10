@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"log"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -20,7 +20,7 @@ func TestRunLoop_CollectsAndShutdown(t *testing.T) {
 		errs: map[string]error{},
 	}
 
-	collector := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
 	writer := newMockWriter(nil)
 
 	cfg := &Config{
@@ -32,7 +32,7 @@ func TestRunLoop_CollectsAndShutdown(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		run(ctx, cfg, collector, writer)
+		run(ctx, cfg, collector, writer, nil)
 		close(done)
 	}()
 
@@ -46,14 +46,14 @@ func TestRunLoop_CollectsAndShutdown(t *testing.T) {
 		t.Fatal("run loop did not shut down in time")
 	}
 
-	// Should have at least 2 writes: immediate + ticker ticks.
+	// Should have at least 2 writes: immediate + ticker ticks (+ final flush).
 	if len(writer.written) < 2 {
 		t.Errorf("got %d writes, want at least 2", len(writer.written))
 	}
 }
 
 func TestRunLoop_GracefulShutdown(t *testing.T) {
-	collector := NewCollector(&mockDiscoverer{drives: nil}, &mockRunner{})
+	collector := NewCollector(&mockDiscoverer{drives: nil}, &mockRunner{}, nil)
 	writer := newMockWriter(nil)
 
 	cfg := &Config{
@@ -65,7 +65,7 @@ func TestRunLoop_GracefulShutdown(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		run(ctx, cfg, collector, writer)
+		run(ctx, cfg, collector, writer, nil)
 		close(done)
 	}()
 
@@ -95,7 +95,7 @@ func TestRunLoop_WriterErrorDoesNotCrash(t *testing.T) {
 		errs: map[string]error{},
 	}
 
-	collector := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
 	writer := newMockWriter(context.DeadlineExceeded)
 
 	cfg := &Config{
@@ -107,7 +107,7 @@ func TestRunLoop_WriterErrorDoesNotCrash(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		run(ctx, cfg, collector, writer)
+		run(ctx, cfg, collector, writer, nil)
 		close(done)
 	}()
 
@@ -133,7 +133,7 @@ func TestRunOnce(t *testing.T) {
 		errs: map[string]error{},
 	}
 
-	collector := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
 	writer := newMockWriter(nil)
 
 	cfg := &Config{
@@ -143,7 +143,7 @@ func TestRunOnce(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	run(ctx, cfg, collector, writer)
+	run(ctx, cfg, collector, writer, nil)
 
 	if len(writer.written) != 1 {
 		t.Errorf("got %d writes, want exactly 1", len(writer.written))
@@ -218,7 +218,7 @@ func TestRunOnceWithEcho(t *testing.T) {
 		errs: map[string]error{},
 	}
 
-	collector := NewCollector(&mockDiscoverer{drives: drives}, runner)
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
 	writer := &echoWriter{}
 
 	cfg := &Config{
@@ -232,12 +232,8 @@ func TestRunOnceWithEcho(t *testing.T) {
 	origStdout := os.Stdout
 	os.Stdout = wPipe
 
-	// Redirect log output to stderr so it doesn't go to our pipe.
-	log.SetOutput(os.Stderr)
-	defer log.SetOutput(os.Stderr)
-
 	ctx := context.Background()
-	run(ctx, cfg, collector, writer)
+	run(ctx, cfg, collector, writer, nil)
 
 	wPipe.Close()
 	os.Stdout = origStdout
@@ -247,5 +243,125 @@ func TestRunOnceWithEcho(t *testing.T) {
 
 	if !bytes.Contains(buf.Bytes(), []byte("drive=sata1")) {
 		t.Error("echo output missing sata1")
+	}
+}
+
+func TestRunLoop_FinalFlushOnShutdown(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+	}
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
+		},
+		errs: map[string]error{},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	writer := newMockWriter(nil)
+
+	cfg := &Config{
+		Interval: 1 * time.Hour, // Very long — only initial + final collection.
+		Hostname: "test-nas",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		run(ctx, cfg, collector, writer, nil)
+		close(done)
+	}()
+
+	// Wait for initial collection.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run loop did not shut down in time")
+	}
+
+	// Should have exactly 2 writes: initial + final flush.
+	if len(writer.written) != 2 {
+		t.Errorf("got %d writes, want 2 (initial + final flush)", len(writer.written))
+	}
+	if !writer.closed {
+		t.Error("writer.Close() was not called")
+	}
+}
+
+func TestRunLoop_SIGHUPReload(t *testing.T) {
+	path := writeTestConfig(t, `
+influxdb:
+  url: "http://10.0.0.1:8086"
+  token: "t"
+  org: "o"
+  bucket: "b"
+hostname: "initial-host"
+interval: 1h
+`)
+
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+	}
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
+		},
+		errs: map[string]error{},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	writer := newMockWriter(nil)
+
+	cfg := &Config{
+		Interval: 1 * time.Hour,
+		Hostname: "initial-host",
+		LogLevel: "info",
+	}
+
+	reloadCh := make(chan os.Signal, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		run(ctx, cfg, collector, writer, &runOptions{
+			ConfigPath: path,
+			ReloadCh:   reloadCh,
+		})
+		close(done)
+	}()
+
+	// Wait for initial collection.
+	time.Sleep(20 * time.Millisecond)
+
+	// Rewrite config with new hostname.
+	os.WriteFile(path, []byte(`
+influxdb:
+  url: "http://10.0.0.1:8086"
+  token: "t"
+  org: "o"
+  bucket: "b"
+hostname: "reloaded-host"
+interval: 1h
+`), 0644)
+
+	reloadCh <- syscall.SIGHUP
+	time.Sleep(20 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run loop did not shut down in time")
+	}
+
+	// Safe to check after run() has exited — no concurrent writes.
+	if cfg.Hostname != "reloaded-host" {
+		t.Errorf("hostname = %q, want %q after reload", cfg.Hostname, "reloaded-host")
 	}
 }
