@@ -1,9 +1,11 @@
-package main
+package smartctl
 
 import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+
+	"github.com/danweinerdev/smart-monitor/internal/discovery"
 )
 
 // SmartctlOutput represents the top-level JSON output from smartctl --json.
@@ -65,7 +67,7 @@ type NVMESmartHealth struct {
 
 // DriveMetrics holds the parsed SMART data for one drive.
 type DriveMetrics struct {
-	Drive  Drive
+	Drive  discovery.Drive
 	Model  string
 	Serial string
 	Fields map[string]interface{}
@@ -73,7 +75,7 @@ type DriveMetrics struct {
 
 // SmartctlRunner abstracts smartctl execution.
 type SmartctlRunner interface {
-	Run(drive Drive) (*SmartctlOutput, error)
+	Run(drive discovery.Drive) (*SmartctlOutput, error)
 }
 
 // ExecSmartctl runs the real smartctl binary.
@@ -85,9 +87,9 @@ func NewExecSmartctl() *ExecSmartctl {
 	return &ExecSmartctl{Path: "smartctl"}
 }
 
-func (e *ExecSmartctl) Run(drive Drive) (*SmartctlOutput, error) {
+func (e *ExecSmartctl) Run(drive discovery.Drive) (*SmartctlOutput, error) {
 	args := []string{"--json", "-a"}
-	if drive.Type == DriveTypeSATA {
+	if drive.Type == discovery.DriveTypeSATA {
 		args = append(args, "-d", "sat")
 	}
 	args = append(args, drive.Path)
@@ -125,7 +127,7 @@ var sataAttributeIDs = map[int]string{
 }
 
 // ParseMetrics extracts DriveMetrics from smartctl output.
-func ParseMetrics(drive Drive, output *SmartctlOutput) (*DriveMetrics, error) {
+func ParseMetrics(drive discovery.Drive, output *SmartctlOutput) (*DriveMetrics, error) {
 	metrics := &DriveMetrics{
 		Drive:  drive,
 		Model:  output.ModelName,
@@ -134,7 +136,7 @@ func ParseMetrics(drive Drive, output *SmartctlOutput) (*DriveMetrics, error) {
 	}
 
 	switch drive.Type {
-	case DriveTypeSATA:
+	case discovery.DriveTypeSATA:
 		if output.ATASmart == nil {
 			return nil, fmt.Errorf("no ata_smart_attributes in output for %s", drive.Path)
 		}
@@ -150,7 +152,7 @@ func ParseMetrics(drive Drive, output *SmartctlOutput) (*DriveMetrics, error) {
 			}
 		}
 
-	case DriveTypeNVMe:
+	case discovery.DriveTypeNVMe:
 		if output.NVMESmart == nil {
 			return nil, fmt.Errorf("no nvme_smart_health_information_log in output for %s", drive.Path)
 		}

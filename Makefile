@@ -1,11 +1,11 @@
-BINARY := synology-monitor
+BINARY := smart-monitor
 BUILD_DIR := bin
 GOFLAGS := -trimpath -ldflags="-s -w"
 
 .PHONY: build test lint clean install
 
 build:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/smart-monitor
 
 test:
 	go test -v -race ./...

@@ -1,9 +1,11 @@
-package main
+package smartctl
 
 import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/danweinerdev/smart-monitor/internal/discovery"
 )
 
 func loadFixture(t *testing.T, path string) *SmartctlOutput {
@@ -21,7 +23,7 @@ func loadFixture(t *testing.T, path string) *SmartctlOutput {
 
 func TestParseSATAHealthy(t *testing.T) {
 	output := loadFixture(t, "testdata/sata_healthy.json")
-	drive := Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA}
+	drive := discovery.Drive{Path: "/dev/sata1", Name: "sata1", Type: discovery.DriveTypeSATA}
 
 	metrics, err := ParseMetrics(drive, output)
 	if err != nil {
@@ -36,14 +38,14 @@ func TestParseSATAHealthy(t *testing.T) {
 	}
 
 	expectedFields := map[string]int64{
-		"raw_read_error_rate":    0,
+		"raw_read_error_rate":      0,
 		"reallocated_sector_count": 0,
-		"seek_error_rate":        0,
-		"power_on_hours":         28456,
-		"spin_retry_count":       0,
-		"temperature":            34,
-		"current_pending_sector": 0,
-		"offline_uncorrectable":  0,
+		"seek_error_rate":          0,
+		"power_on_hours":           28456,
+		"spin_retry_count":         0,
+		"temperature":              34,
+		"current_pending_sector":   0,
+		"offline_uncorrectable":    0,
 	}
 
 	for name, want := range expectedFields {
@@ -60,7 +62,7 @@ func TestParseSATAHealthy(t *testing.T) {
 
 func TestParseSATADegraded(t *testing.T) {
 	output := loadFixture(t, "testdata/sata_degraded.json")
-	drive := Drive{Path: "/dev/sata2", Name: "sata2", Type: DriveTypeSATA}
+	drive := discovery.Drive{Path: "/dev/sata2", Name: "sata2", Type: discovery.DriveTypeSATA}
 
 	metrics, err := ParseMetrics(drive, output)
 	if err != nil {
@@ -83,7 +85,7 @@ func TestParseSATADegraded(t *testing.T) {
 
 func TestParseNVMeHealthy(t *testing.T) {
 	output := loadFixture(t, "testdata/nvme_healthy.json")
-	drive := Drive{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: DriveTypeNVMe}
+	drive := discovery.Drive{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: discovery.DriveTypeNVMe}
 
 	metrics, err := ParseMetrics(drive, output)
 	if err != nil {
@@ -122,7 +124,7 @@ func TestParseNVMeHealthy(t *testing.T) {
 
 func TestParseNVMeWorn(t *testing.T) {
 	output := loadFixture(t, "testdata/nvme_worn.json")
-	drive := Drive{Path: "/dev/nvme1n1", Name: "nvme1n1", Type: DriveTypeNVMe}
+	drive := discovery.Drive{Path: "/dev/nvme1n1", Name: "nvme1n1", Type: discovery.DriveTypeNVMe}
 
 	metrics, err := ParseMetrics(drive, output)
 	if err != nil {
@@ -149,7 +151,7 @@ func TestParseSATA_MissingAttributes(t *testing.T) {
 		ModelName: "Test Drive",
 		SerialNum: "TEST123",
 	}
-	drive := Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA}
+	drive := discovery.Drive{Path: "/dev/sata1", Name: "sata1", Type: discovery.DriveTypeSATA}
 
 	_, err := ParseMetrics(drive, output)
 	if err == nil {
@@ -162,7 +164,7 @@ func TestParseNVMe_MissingHealthLog(t *testing.T) {
 		ModelName: "Test NVMe",
 		SerialNum: "TEST456",
 	}
-	drive := Drive{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: DriveTypeNVMe}
+	drive := discovery.Drive{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: discovery.DriveTypeNVMe}
 
 	_, err := ParseMetrics(drive, output)
 	if err == nil {
@@ -181,7 +183,7 @@ func TestParseSATA_MissingIndividualAttribute(t *testing.T) {
 			},
 		},
 	}
-	drive := Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA}
+	drive := discovery.Drive{Path: "/dev/sata1", Name: "sata1", Type: discovery.DriveTypeSATA}
 
 	metrics, err := ParseMetrics(drive, output)
 	if err != nil {
@@ -208,7 +210,7 @@ func TestParseSATA_TemperatureFallback(t *testing.T) {
 			},
 		},
 	}
-	drive := Drive{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA}
+	drive := discovery.Drive{Path: "/dev/sata1", Name: "sata1", Type: discovery.DriveTypeSATA}
 
 	metrics, err := ParseMetrics(drive, output)
 	if err != nil {

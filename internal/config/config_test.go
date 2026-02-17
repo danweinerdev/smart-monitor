@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -271,7 +271,7 @@ func TestMonitorConfig(t *testing.T) {
 		LogLevel: "warn",
 	}
 
-	mc := cfg.monitorConfig()
+	mc := cfg.MonitorConfig()
 
 	if mc.Global.PollInterval.Duration != 10*time.Minute {
 		t.Errorf("PollInterval = %v, want 10m", mc.Global.PollInterval.Duration)
@@ -293,7 +293,7 @@ func TestMonitorConfig(t *testing.T) {
 	}
 }
 
-func TestInfluxDBConfig(t *testing.T) {
+func TestInfluxBackendConfig(t *testing.T) {
 	cfg := &Config{
 		InfluxDB: InfluxDBConfig{
 			URL:    "http://10.0.0.1:8086",
@@ -303,7 +303,7 @@ func TestInfluxDBConfig(t *testing.T) {
 		},
 	}
 
-	ic := cfg.influxDBConfig()
+	ic := cfg.InfluxBackendConfig()
 
 	if !ic.Enabled {
 		t.Error("Enabled should be true")

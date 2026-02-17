@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -115,8 +115,8 @@ func validateConfig(cfg *Config) error {
 	return nil
 }
 
-// monitorConfig converts our YAML config to a monitor.Config for go-monitor.
-func (c *Config) monitorConfig() *monitor.Config {
+// MonitorConfig converts our YAML config to a monitor.Config for go-monitor.
+func (c *Config) MonitorConfig() *monitor.Config {
 	return &monitor.Config{
 		Global: monitor.GlobalConfig{
 			PollInterval:  monitor.Duration{Duration: c.Interval},
@@ -135,8 +135,8 @@ func (c *Config) monitorConfig() *monitor.Config {
 	}
 }
 
-// influxDBConfig converts our InfluxDBConfig to go-monitor's type.
-func (c *Config) influxDBConfig() monitor.InfluxDBConfig {
+// InfluxBackendConfig converts our InfluxDBConfig to go-monitor's type.
+func (c *Config) InfluxBackendConfig() monitor.InfluxDBConfig {
 	return monitor.InfluxDBConfig{
 		Enabled: true,
 		URL:     c.InfluxDB.URL,

@@ -3,26 +3,82 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	monitor "github.com/danweinerdev/go-monitor"
+	"github.com/danweinerdev/smart-monitor/internal/collector"
+	"github.com/danweinerdev/smart-monitor/internal/discovery"
+	"github.com/danweinerdev/smart-monitor/internal/smartctl"
 )
 
+// mockDiscoverer implements discovery.DriveDiscoverer for testing.
+type mockDiscoverer struct {
+	drives []discovery.Drive
+	err    error
+}
+
+func (m *mockDiscoverer) Discover() ([]discovery.Drive, error) {
+	return m.drives, m.err
+}
+
+// mockRunner implements smartctl.SmartctlRunner for testing.
+type mockRunner struct {
+	outputs map[string]*smartctl.SmartctlOutput
+	errs    map[string]error
+}
+
+func (m *mockRunner) Run(drive discovery.Drive) (*smartctl.SmartctlOutput, error) {
+	if err, ok := m.errs[drive.Path]; ok {
+		return nil, err
+	}
+	if out, ok := m.outputs[drive.Path]; ok {
+		return out, nil
+	}
+	return nil, fmt.Errorf("no mock output for %s", drive.Path)
+}
+
+func makeSATAOutput(model, serial string) *smartctl.SmartctlOutput {
+	return &smartctl.SmartctlOutput{
+		ModelName: model,
+		SerialNum: serial,
+		ATASmart: &smartctl.ATASmartAttributes{
+			Table: []smartctl.ATASmartAttribute{
+				{ID: 9, Name: "Power_On_Hours", Raw: smartctl.ATASmartAttributeValue{Value: 1000}},
+				{ID: 194, Name: "Temperature_Celsius", Raw: smartctl.ATASmartAttributeValue{Value: 35}},
+			},
+		},
+	}
+}
+
+func makeNVMeOutput(model, serial string) *smartctl.SmartctlOutput {
+	return &smartctl.SmartctlOutput{
+		ModelName: model,
+		SerialNum: serial,
+		NVMESmart: &smartctl.NVMESmartHealth{
+			Temperature:    38,
+			PowerOnHours:   5000,
+			PercentageUsed: 5,
+			AvailableSpare: 100,
+		},
+	}
+}
+
 func TestIntegration_RunOnceEcho(t *testing.T) {
-	drives := []Drive{
-		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
-		{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: DriveTypeNVMe},
+	drives := []discovery.Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: discovery.DriveTypeSATA},
+		{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: discovery.DriveTypeNVMe},
 	}
 	runner := &mockRunner{
-		outputs: map[string]*SmartctlOutput{
+		outputs: map[string]*smartctl.SmartctlOutput{
 			"/dev/sata1":   makeSATAOutput("WD Red", "WD001"),
 			"/dev/nvme0n1": makeNVMeOutput("Samsung 970", "SAM001"),
 		},
 		errs: map[string]error{},
 	}
 
-	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
-	collectFn := makeCollectFunc(collector, "test-nas", nil)
+	coll := collector.NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	collectFn := collector.MakeCollectFunc(coll, "test-nas", nil)
 
 	var buf bytes.Buffer
 	echoBackend := monitor.NewEcho(&buf, nil)
@@ -30,7 +86,7 @@ func TestIntegration_RunOnceEcho(t *testing.T) {
 	cfg := monitor.DefaultConfig()
 	cfg.Global.PollInterval = monitor.Duration{Duration: 50_000_000} // 50ms
 
-	m, err := monitor.New("test-synology",
+	m, err := monitor.New("test-smart",
 		collectFn,
 		monitor.WithConfig(cfg),
 		monitor.WithRunOnce(true),
@@ -57,15 +113,15 @@ func TestIntegration_RunOnceEcho(t *testing.T) {
 }
 
 func TestIntegration_RunOnceNoMetrics(t *testing.T) {
-	collector := NewCollector(&mockDiscoverer{drives: nil}, &mockRunner{}, nil)
-	collectFn := makeCollectFunc(collector, "test-nas", nil)
+	coll := collector.NewCollector(&mockDiscoverer{drives: nil}, &mockRunner{}, nil)
+	collectFn := collector.MakeCollectFunc(coll, "test-nas", nil)
 
 	var buf bytes.Buffer
 	echoBackend := monitor.NewEcho(&buf, nil)
 
 	cfg := monitor.DefaultConfig()
 
-	m, err := monitor.New("test-synology",
+	m, err := monitor.New("test-smart",
 		collectFn,
 		monitor.WithConfig(cfg),
 		monitor.WithRunOnce(true),
@@ -85,25 +141,25 @@ func TestIntegration_RunOnceNoMetrics(t *testing.T) {
 }
 
 func TestIntegration_MetricFieldsPreserved(t *testing.T) {
-	drives := []Drive{
-		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+	drives := []discovery.Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: discovery.DriveTypeSATA},
 	}
 	runner := &mockRunner{
-		outputs: map[string]*SmartctlOutput{
+		outputs: map[string]*smartctl.SmartctlOutput{
 			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
 		},
 		errs: map[string]error{},
 	}
 
-	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
-	collectFn := makeCollectFunc(collector, "test-nas", nil)
+	coll := collector.NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	collectFn := collector.MakeCollectFunc(coll, "test-nas", nil)
 
 	var buf bytes.Buffer
 	echoBackend := monitor.NewEcho(&buf, nil)
 
 	cfg := monitor.DefaultConfig()
 
-	m, err := monitor.New("test-synology",
+	m, err := monitor.New("test-smart",
 		collectFn,
 		monitor.WithConfig(cfg),
 		monitor.WithRunOnce(true),

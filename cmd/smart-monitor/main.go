@@ -9,6 +9,10 @@ import (
 
 	monitor "github.com/danweinerdev/go-monitor"
 	"github.com/danweinerdev/go-monitor/influxdb"
+	"github.com/danweinerdev/smart-monitor/internal/collector"
+	"github.com/danweinerdev/smart-monitor/internal/config"
+	"github.com/danweinerdev/smart-monitor/internal/discovery"
+	"github.com/danweinerdev/smart-monitor/internal/smartctl"
 )
 
 func main() {
@@ -17,13 +21,13 @@ func main() {
 	echo := flag.Bool("echo", false, "print metrics to stdout instead of writing to InfluxDB")
 	flag.Parse()
 
-	cfg, err := LoadConfig(*configPath)
+	cfg, err := config.LoadConfig(*configPath)
 	if err != nil && !*echo {
 		slog.Error("fatal configuration error", "error", err)
 		os.Exit(1)
 	}
 	if cfg == nil {
-		cfg = &Config{Interval: 30 * time.Minute, LogLevel: "info"}
+		cfg = &config.Config{Interval: 30 * time.Minute, LogLevel: "info"}
 		if h, err := os.Hostname(); err == nil {
 			cfg.Hostname = h
 		}
@@ -32,17 +36,17 @@ func main() {
 	logger, levelVar := monitor.NewLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
-	discoverer := NewDevFSDiscoverer("")
-	runner := NewExecSmartctl()
-	collector := NewCollector(discoverer, runner, logger)
-	collectFn := makeCollectFunc(collector, cfg.Hostname, logger)
+	disc := discovery.NewDevFSDiscoverer("")
+	runner := smartctl.NewExecSmartctl()
+	coll := collector.NewCollector(disc, runner, logger)
+	collectFn := collector.MakeCollectFunc(coll, cfg.Hostname, logger)
 
 	opts := []monitor.Option{
-		monitor.WithConfig(cfg.monitorConfig()),
+		monitor.WithConfig(cfg.MonitorConfig()),
 		monitor.WithLogger(logger),
 		monitor.WithRunOnce(*runOnce),
 		monitor.WithReloadFunc(func(path string) (*monitor.Config, error) {
-			newCfg, err := LoadConfig(*configPath)
+			newCfg, err := config.LoadConfig(*configPath)
 			if err != nil {
 				return nil, err
 			}
@@ -51,18 +55,18 @@ func main() {
 				levelVar.Set(monitor.ParseLogLevel(newCfg.LogLevel))
 			}
 			cfg = newCfg
-			return newCfg.monitorConfig(), nil
+			return newCfg.MonitorConfig(), nil
 		}),
 	}
 
 	if *echo {
 		opts = append(opts, monitor.WithEcho(true))
 	} else {
-		influxBackend := influxdb.New(cfg.influxDBConfig(), logger)
+		influxBackend := influxdb.New(cfg.InfluxBackendConfig(), logger)
 		opts = append(opts, monitor.WithBackend(influxBackend))
 	}
 
-	m, err := monitor.New("synology-monitor", collectFn, opts...)
+	m, err := monitor.New("smart-monitor", collectFn, opts...)
 	if err != nil {
 		slog.Error("failed to initialize monitor", "error", err)
 		os.Exit(1)

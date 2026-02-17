@@ -1,4 +1,4 @@
-package main
+package collector
 
 import (
 	"context"
@@ -7,16 +7,18 @@ import (
 	"sync"
 
 	monitor "github.com/danweinerdev/go-monitor"
+	"github.com/danweinerdev/smart-monitor/internal/discovery"
+	"github.com/danweinerdev/smart-monitor/internal/smartctl"
 )
 
 // Collector orchestrates drive discovery and SMART data collection.
 type Collector struct {
-	discoverer DriveDiscoverer
-	runner     SmartctlRunner
+	discoverer discovery.DriveDiscoverer
+	runner     smartctl.SmartctlRunner
 	logger     *slog.Logger
 }
 
-func NewCollector(discoverer DriveDiscoverer, runner SmartctlRunner, logger *slog.Logger) *Collector {
+func NewCollector(discoverer discovery.DriveDiscoverer, runner smartctl.SmartctlRunner, logger *slog.Logger) *Collector {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -29,13 +31,13 @@ func NewCollector(discoverer DriveDiscoverer, runner SmartctlRunner, logger *slo
 
 // driveResult holds the result of polling a single drive.
 type driveResult struct {
-	metrics *DriveMetrics
+	metrics *smartctl.DriveMetrics
 	err     error
 }
 
 // CollectAll discovers drives and collects SMART metrics from each concurrently.
 // Individual drive failures do not stop collection of other drives.
-func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
+func (c *Collector) CollectAll() ([]smartctl.DriveMetrics, []error) {
 	drives, err := c.discoverer.Discover()
 	if err != nil {
 		return nil, []error{fmt.Errorf("drive discovery failed: %w", err)}
@@ -51,7 +53,7 @@ func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
 
 	for i, drive := range drives {
 		wg.Add(1)
-		go func(idx int, d Drive) {
+		go func(idx int, d discovery.Drive) {
 			defer wg.Done()
 
 			output, err := c.runner.Run(d)
@@ -60,7 +62,7 @@ func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
 				return
 			}
 
-			m, err := ParseMetrics(d, output)
+			m, err := smartctl.ParseMetrics(d, output)
 			if err != nil {
 				results[idx] = driveResult{err: fmt.Errorf("parsing metrics for %s: %w", d.Path, err)}
 				return
@@ -72,7 +74,7 @@ func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
 
 	wg.Wait()
 
-	var metrics []DriveMetrics
+	var metrics []smartctl.DriveMetrics
 	var errs []error
 	for _, r := range results {
 		if r.err != nil {
@@ -85,9 +87,9 @@ func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
 	return metrics, errs
 }
 
-// makeCollectFunc wraps a Collector into a monitor.CollectFunc,
+// MakeCollectFunc wraps a Collector into a monitor.CollectFunc,
 // converting []DriveMetrics to []*monitor.Metric.
-func makeCollectFunc(collector *Collector, hostname string, logger *slog.Logger) monitor.CollectFunc {
+func MakeCollectFunc(collector *Collector, hostname string, logger *slog.Logger) monitor.CollectFunc {
 	if logger == nil {
 		logger = slog.Default()
 	}

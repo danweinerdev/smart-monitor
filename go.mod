@@ -1,4 +1,4 @@
-module github.com/danweinerdev/synology-monitor
+module github.com/danweinerdev/smart-monitor
 
 go 1.25.7
 
