@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -140,39 +141,6 @@ func TestCollector_DiscoveryError(t *testing.T) {
 	}
 }
 
-func TestCollector_Stats(t *testing.T) {
-	drives := []Drive{
-		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
-		{Path: "/dev/sata2", Name: "sata2", Type: DriveTypeSATA},
-	}
-
-	runner := &mockRunner{
-		outputs: map[string]*SmartctlOutput{
-			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
-		},
-		errs: map[string]error{
-			"/dev/sata2": fmt.Errorf("timeout"),
-		},
-	}
-
-	c := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
-	c.CollectAll()
-
-	stats := c.Stats()
-	if stats.TotalPolls != 1 {
-		t.Errorf("TotalPolls = %d, want 1", stats.TotalPolls)
-	}
-	if stats.SuccessfulPolls != 1 {
-		t.Errorf("SuccessfulPolls = %d, want 1", stats.SuccessfulPolls)
-	}
-	if stats.FailedPolls != 1 {
-		t.Errorf("FailedPolls = %d, want 1", stats.FailedPolls)
-	}
-	if stats.LastDuration <= 0 {
-		t.Error("LastDuration should be positive")
-	}
-}
-
 func TestCollector_ConcurrentExecution(t *testing.T) {
 	// Verify that all drives are polled even with concurrent execution.
 	drives := make([]Drive, 10)
@@ -193,5 +161,120 @@ func TestCollector_ConcurrentExecution(t *testing.T) {
 	}
 	if len(metrics) != 10 {
 		t.Errorf("got %d metrics, want 10", len(metrics))
+	}
+}
+
+func TestMakeCollectFunc_ConvertsMetrics(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+		{Path: "/dev/nvme0n1", Name: "nvme0n1", Type: DriveTypeNVMe},
+	}
+
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1":   makeSATAOutput("WD Red", "WD001"),
+			"/dev/nvme0n1": makeNVMeOutput("Samsung 970", "SAM001"),
+		},
+		errs: map[string]error{},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	collectFn := makeCollectFunc(collector, "test-nas", nil)
+
+	metrics, err := collectFn(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(metrics) != 2 {
+		t.Fatalf("got %d metrics, want 2", len(metrics))
+	}
+
+	for _, m := range metrics {
+		if m.Measurement != "smart" {
+			t.Errorf("measurement = %q, want %q", m.Measurement, "smart")
+		}
+		if m.Tags["hostname"] != "test-nas" {
+			t.Errorf("hostname tag = %q, want %q", m.Tags["hostname"], "test-nas")
+		}
+		if len(m.Fields) == 0 {
+			t.Error("fields should not be empty")
+		}
+	}
+
+	// Verify SATA metric tags.
+	sataMetric := metrics[0]
+	if sataMetric.Tags["device"] != "sata1" {
+		t.Errorf("device tag = %q, want %q", sataMetric.Tags["device"], "sata1")
+	}
+	if sataMetric.Tags["type"] != "sata" {
+		t.Errorf("type tag = %q, want %q", sataMetric.Tags["type"], "sata")
+	}
+	if sataMetric.Tags["model"] != "WD Red" {
+		t.Errorf("model tag = %q, want %q", sataMetric.Tags["model"], "WD Red")
+	}
+	if sataMetric.Tags["serial"] != "WD001" {
+		t.Errorf("serial tag = %q, want %q", sataMetric.Tags["serial"], "WD001")
+	}
+
+	// Verify NVMe metric tags.
+	nvmeMetric := metrics[1]
+	if nvmeMetric.Tags["device"] != "nvme0n1" {
+		t.Errorf("device tag = %q, want %q", nvmeMetric.Tags["device"], "nvme0n1")
+	}
+	if nvmeMetric.Tags["type"] != "nvme" {
+		t.Errorf("type tag = %q, want %q", nvmeMetric.Tags["type"], "nvme")
+	}
+}
+
+func TestMakeCollectFunc_PartialFailure(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+		{Path: "/dev/sata2", Name: "sata2", Type: DriveTypeSATA},
+	}
+
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{
+			"/dev/sata1": makeSATAOutput("WD Red", "WD001"),
+		},
+		errs: map[string]error{
+			"/dev/sata2": fmt.Errorf("device busy"),
+		},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	collectFn := makeCollectFunc(collector, "test-nas", nil)
+
+	metrics, err := collectFn(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error on partial failure: %v", err)
+	}
+
+	if len(metrics) != 1 {
+		t.Errorf("got %d metrics, want 1", len(metrics))
+	}
+}
+
+func TestMakeCollectFunc_AllFail(t *testing.T) {
+	drives := []Drive{
+		{Path: "/dev/sata1", Name: "sata1", Type: DriveTypeSATA},
+	}
+
+	runner := &mockRunner{
+		outputs: map[string]*SmartctlOutput{},
+		errs: map[string]error{
+			"/dev/sata1": fmt.Errorf("device busy"),
+		},
+	}
+
+	collector := NewCollector(&mockDiscoverer{drives: drives}, runner, nil)
+	collectFn := makeCollectFunc(collector, "test-nas", nil)
+
+	metrics, err := collectFn(context.Background())
+	if err == nil {
+		t.Fatal("expected error when all drives fail")
+	}
+	if metrics != nil {
+		t.Errorf("expected nil metrics, got %v", metrics)
 	}
 }

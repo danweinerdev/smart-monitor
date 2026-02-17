@@ -1,12 +1,13 @@
 package main
 
 import (
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	monitor "github.com/danweinerdev/go-monitor"
 )
 
 func writeTestConfig(t *testing.T, content string) string {
@@ -210,9 +211,9 @@ func TestLoadConfig_MultipleValidationErrors(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	verrs, ok := err.(ValidationErrors)
+	verrs, ok := err.(monitor.ValidationErrors)
 	if !ok {
-		t.Fatalf("expected ValidationErrors, got %T: %v", err, err)
+		t.Fatalf("expected monitor.ValidationErrors, got %T: %v", err, err)
 	}
 	if len(verrs) < 4 {
 		t.Errorf("expected at least 4 validation errors, got %d: %v", len(verrs), verrs)
@@ -256,21 +257,67 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 	}
 }
 
-func TestParseLogLevel(t *testing.T) {
-	tests := []struct {
-		input string
-		want  slog.Level
-	}{
-		{"debug", slog.LevelDebug},
-		{"info", slog.LevelInfo},
-		{"warn", slog.LevelWarn},
-		{"error", slog.LevelError},
-		{"DEBUG", slog.LevelDebug},
-		{"unknown", slog.LevelInfo},
+func TestMonitorConfig(t *testing.T) {
+	cfg := &Config{
+		InfluxDB: InfluxDBConfig{
+			URL:           "http://10.0.0.1:8086",
+			Token:         "tok",
+			Org:           "org",
+			Bucket:        "bucket",
+			RetryAttempts: 5,
+			RetryDelay:    3 * time.Second,
+		},
+		Interval: 10 * time.Minute,
+		LogLevel: "warn",
 	}
-	for _, tt := range tests {
-		if got := ParseLogLevel(tt.input); got != tt.want {
-			t.Errorf("ParseLogLevel(%q) = %v, want %v", tt.input, got, tt.want)
-		}
+
+	mc := cfg.monitorConfig()
+
+	if mc.Global.PollInterval.Duration != 10*time.Minute {
+		t.Errorf("PollInterval = %v, want 10m", mc.Global.PollInterval.Duration)
+	}
+	if mc.Global.LogLevel != "warn" {
+		t.Errorf("LogLevel = %q, want %q", mc.Global.LogLevel, "warn")
+	}
+	if mc.Global.RetryAttempts != 5 {
+		t.Errorf("RetryAttempts = %d, want 5", mc.Global.RetryAttempts)
+	}
+	if mc.Global.RetryDelay.Duration != 3*time.Second {
+		t.Errorf("RetryDelay = %v, want 3s", mc.Global.RetryDelay.Duration)
+	}
+	if mc.InfluxDB.URL != "http://10.0.0.1:8086" {
+		t.Errorf("InfluxDB.URL = %q, want %q", mc.InfluxDB.URL, "http://10.0.0.1:8086")
+	}
+	if !mc.InfluxDB.Enabled {
+		t.Error("InfluxDB.Enabled should be true")
+	}
+}
+
+func TestInfluxDBConfig(t *testing.T) {
+	cfg := &Config{
+		InfluxDB: InfluxDBConfig{
+			URL:    "http://10.0.0.1:8086",
+			Token:  "my-token",
+			Org:    "my-org",
+			Bucket: "my-bucket",
+		},
+	}
+
+	ic := cfg.influxDBConfig()
+
+	if !ic.Enabled {
+		t.Error("Enabled should be true")
+	}
+	if ic.URL != "http://10.0.0.1:8086" {
+		t.Errorf("URL = %q, want %q", ic.URL, "http://10.0.0.1:8086")
+	}
+	if ic.Token != "my-token" {
+		t.Errorf("Token = %q, want %q", ic.Token, "my-token")
+	}
+	if ic.Org != "my-org" {
+		t.Errorf("Org = %q, want %q", ic.Org, "my-org")
+	}
+	if ic.Bucket != "my-bucket" {
+		t.Errorf("Bucket = %q, want %q", ic.Bucket, "my-bucket")
 	}
 }

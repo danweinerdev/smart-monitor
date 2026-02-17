@@ -1,29 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
-)
 
-// PollStats holds statistics for a single polling cycle.
-type PollStats struct {
-	TotalPolls      int64
-	SuccessfulPolls int64
-	FailedPolls     int64
-	TotalMetrics    int64
-	LastDuration    time.Duration
-}
+	monitor "github.com/danweinerdev/go-monitor"
+)
 
 // Collector orchestrates drive discovery and SMART data collection.
 type Collector struct {
 	discoverer DriveDiscoverer
 	runner     SmartctlRunner
 	logger     *slog.Logger
-
-	mu    sync.Mutex
-	stats PollStats
 }
 
 func NewCollector(discoverer DriveDiscoverer, runner SmartctlRunner, logger *slog.Logger) *Collector {
@@ -46,8 +36,6 @@ type driveResult struct {
 // CollectAll discovers drives and collects SMART metrics from each concurrently.
 // Individual drive failures do not stop collection of other drives.
 func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
-	start := time.Now()
-
 	drives, err := c.discoverer.Discover()
 	if err != nil {
 		return nil, []error{fmt.Errorf("drive discovery failed: %w", err)}
@@ -94,29 +82,37 @@ func (c *Collector) CollectAll() ([]DriveMetrics, []error) {
 		}
 	}
 
-	duration := time.Since(start)
-
-	c.mu.Lock()
-	c.stats.TotalPolls++
-	c.stats.SuccessfulPolls += int64(len(metrics))
-	c.stats.FailedPolls += int64(len(errs))
-	c.stats.TotalMetrics += int64(len(metrics))
-	c.stats.LastDuration = duration
-	c.mu.Unlock()
-
-	c.logger.Info("poll completed",
-		"duration", duration,
-		"success", len(metrics),
-		"failed", len(errs),
-		"drives", len(drives),
-	)
-
 	return metrics, errs
 }
 
-// Stats returns a snapshot of polling statistics.
-func (c *Collector) Stats() PollStats {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.stats
+// makeCollectFunc wraps a Collector into a monitor.CollectFunc,
+// converting []DriveMetrics to []*monitor.Metric.
+func makeCollectFunc(collector *Collector, hostname string, logger *slog.Logger) monitor.CollectFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(ctx context.Context) ([]*monitor.Metric, error) {
+		metrics, errs := collector.CollectAll()
+		for _, err := range errs {
+			logger.Error("collection error", "error", err)
+		}
+
+		if len(metrics) == 0 && len(errs) > 0 {
+			return nil, fmt.Errorf("all drives failed: %d errors", len(errs))
+		}
+
+		result := make([]*monitor.Metric, 0, len(metrics))
+		for _, m := range metrics {
+			metric := monitor.NewMetric("smart").
+				WithTag("hostname", hostname).
+				WithTag("device", m.Drive.Name).
+				WithTag("model", m.Model).
+				WithTag("serial", m.Serial).
+				WithTag("type", string(m.Drive.Type)).
+				WithFields(m.Fields)
+			result = append(result, metric)
+		}
+
+		return result, nil
+	}
 }

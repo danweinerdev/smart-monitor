@@ -2,20 +2,20 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	monitor "github.com/danweinerdev/go-monitor"
 	"gopkg.in/yaml.v3"
 )
 
 type InfluxDBConfig struct {
-	URL           string `yaml:"url"`
-	Token         string `yaml:"token"`
-	Org           string `yaml:"org"`
-	Bucket        string `yaml:"bucket"`
-	RetryAttempts int    `yaml:"retry_attempts"`
+	URL           string        `yaml:"url"`
+	Token         string        `yaml:"token"`
+	Org           string        `yaml:"org"`
+	Bucket        string        `yaml:"bucket"`
+	RetryAttempts int           `yaml:"retry_attempts"`
 	RetryDelay    time.Duration `yaml:"retry_delay"`
 }
 
@@ -24,31 +24,6 @@ type Config struct {
 	Interval time.Duration  `yaml:"interval"`
 	Hostname string         `yaml:"hostname"`
 	LogLevel string         `yaml:"log_level"`
-	RunOnce  bool           `yaml:"-"`
-}
-
-// ValidationError represents a single config validation error.
-type ValidationError struct {
-	Field   string
-	Message string
-}
-
-func (e *ValidationError) Error() string {
-	return fmt.Sprintf("%s: %s", e.Field, e.Message)
-}
-
-// ValidationErrors collects multiple validation errors.
-type ValidationErrors []ValidationError
-
-func (e ValidationErrors) Error() string {
-	if len(e) == 1 {
-		return e[0].Error()
-	}
-	msgs := make([]string, len(e))
-	for i, err := range e {
-		msgs[i] = err.Error()
-	}
-	return fmt.Sprintf("config validation failed:\n  - %s", strings.Join(msgs, "\n  - "))
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -111,27 +86,27 @@ func applyEnvOverrides(cfg *Config) {
 }
 
 func validateConfig(cfg *Config) error {
-	var errs ValidationErrors
+	var errs monitor.ValidationErrors
 
 	if cfg.InfluxDB.URL == "" {
-		errs = append(errs, ValidationError{Field: "influxdb.url", Message: "is required"})
+		errs = append(errs, monitor.ValidationError{Field: "influxdb.url", Message: "is required"})
 	}
 	if cfg.InfluxDB.Token == "" {
-		errs = append(errs, ValidationError{Field: "influxdb.token", Message: "is required"})
+		errs = append(errs, monitor.ValidationError{Field: "influxdb.token", Message: "is required"})
 	}
 	if cfg.InfluxDB.Org == "" {
-		errs = append(errs, ValidationError{Field: "influxdb.org", Message: "is required"})
+		errs = append(errs, monitor.ValidationError{Field: "influxdb.org", Message: "is required"})
 	}
 	if cfg.InfluxDB.Bucket == "" {
-		errs = append(errs, ValidationError{Field: "influxdb.bucket", Message: "is required"})
+		errs = append(errs, monitor.ValidationError{Field: "influxdb.bucket", Message: "is required"})
 	}
 	if cfg.Interval <= 0 {
-		errs = append(errs, ValidationError{Field: "interval", Message: "must be positive"})
+		errs = append(errs, monitor.ValidationError{Field: "interval", Message: "must be positive"})
 	}
 
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLevels[strings.ToLower(cfg.LogLevel)] {
-		errs = append(errs, ValidationError{Field: "log_level", Message: "must be one of: debug, info, warn, error"})
+		errs = append(errs, monitor.ValidationError{Field: "log_level", Message: "must be one of: debug, info, warn, error"})
 	}
 
 	if len(errs) > 0 {
@@ -140,16 +115,33 @@ func validateConfig(cfg *Config) error {
 	return nil
 }
 
-// ParseLogLevel converts a log level string to slog.Level.
-func ParseLogLevel(level string) slog.Level {
-	switch strings.ToLower(level) {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
+// monitorConfig converts our YAML config to a monitor.Config for go-monitor.
+func (c *Config) monitorConfig() *monitor.Config {
+	return &monitor.Config{
+		Global: monitor.GlobalConfig{
+			PollInterval:  monitor.Duration{Duration: c.Interval},
+			LogLevel:      c.LogLevel,
+			BatchSize:     100,
+			RetryAttempts: c.InfluxDB.RetryAttempts,
+			RetryDelay:    monitor.Duration{Duration: c.InfluxDB.RetryDelay},
+		},
+		InfluxDB: monitor.InfluxDBConfig{
+			Enabled: true,
+			URL:     c.InfluxDB.URL,
+			Token:   c.InfluxDB.Token,
+			Org:     c.InfluxDB.Org,
+			Bucket:  c.InfluxDB.Bucket,
+		},
+	}
+}
+
+// influxDBConfig converts our InfluxDBConfig to go-monitor's type.
+func (c *Config) influxDBConfig() monitor.InfluxDBConfig {
+	return monitor.InfluxDBConfig{
+		Enabled: true,
+		URL:     c.InfluxDB.URL,
+		Token:   c.InfluxDB.Token,
+		Org:     c.InfluxDB.Org,
+		Bucket:  c.InfluxDB.Bucket,
 	}
 }
