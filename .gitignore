@@ -17,7 +17,8 @@
 *.out
 coverage.html
 
-# Go workspace file
+# Go workspace file (local development only)
+go.work
 go.work.sum
 
 # Dependency directories
@@ -39,3 +40,6 @@ go.work.sum
 # Debug
 debug
 __debug_bin*
+
+# Code graph index
+.code-graph/
